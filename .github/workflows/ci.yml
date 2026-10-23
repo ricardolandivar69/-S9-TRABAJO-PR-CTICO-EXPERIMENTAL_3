@@ -29,7 +29,7 @@ jobs:
       DB_NAME: practica3_db
       DB_USER: postgres
       DB_PASSWORD: 1234
-      DB_HOST: 127.0.0.1
+      DB_HOST: localhost
       DB_PORT: 5432
 
     steps:
