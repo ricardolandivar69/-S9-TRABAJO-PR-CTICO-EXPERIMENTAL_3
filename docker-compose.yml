@@ -18,6 +18,7 @@ services:
 
   web:
     build: .
+    image: ${DJANGO_IMAGE:-practica3-django:local}
     container_name: practica3_django
     environment:
       POSTGRES_DB: practica3_db

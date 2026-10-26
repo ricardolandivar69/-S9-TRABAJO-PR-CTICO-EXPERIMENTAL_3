@@ -5,6 +5,8 @@ on:
     branches:
       - main
       - ci-setup
+      - docker-setup
+      - cd-setup
 
   pull_request:
     branches:
@@ -55,3 +57,86 @@ jobs:
 
       - name: Ejecutar pruebas
         run: python manage.py test
+
+  docker-build-deploy:
+    name: Construir imagen y simular despliegue
+    needs: test
+    runs-on: ubuntu-latest
+
+    env:
+      DJANGO_IMAGE: practica3-django:ci
+
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Construir imagen Docker
+        run: |
+          docker build \
+            --tag "$DJANGO_IMAGE" \
+            --tag "practica3-django:ci-${GITHUB_SHA::7}" \
+            .
+
+      - name: Preparar imagen para DockerHub (simulado)
+        run: |
+          DOCKERHUB_IMAGE="docker.io/${GITHUB_REPOSITORY_OWNER,,}/practica3-django:simulado-${GITHUB_SHA::7}"
+          docker tag "$DJANGO_IMAGE" "$DOCKERHUB_IMAGE"
+          echo "$DOCKERHUB_IMAGE" | tee dockerhub-image.txt
+
+      - name: Crear artefacto de evidencia del build
+        run: |
+          mkdir -p build-evidence
+          docker image inspect "$DJANGO_IMAGE" --format '{{.Id}}' \
+            | tee build-evidence/image-id.txt
+          cp dockerhub-image.txt build-evidence/
+          cp Dockerfile build-evidence/
+          cp docker-compose.yml build-evidence/
+          cp deploy-notes.md build-evidence/
+
+      - name: Publicar artefacto del build
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidencia-build-${{ github.sha }}
+          path: build-evidence/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Iniciar despliegue simulado con Docker Compose
+        run: docker compose up --detach --no-build
+
+      - name: Validar aplicación desde HTTP
+        run: |
+          for intento in {1..12}; do
+            if curl --fail --silent --show-error --output /dev/null \
+              http://127.0.0.1:8000/admin/login/; then
+              echo "Aplicación disponible en http://127.0.0.1:8000/admin/login/"
+              exit 0
+            fi
+            echo "Esperando a Django: intento ${intento}/12"
+            sleep 5
+          done
+          docker compose logs --no-color
+          exit 1
+
+      - name: Recopilar evidencia del despliegue
+        if: always()
+        run: |
+          mkdir -p deployment-evidence
+          docker compose ps --all | tee deployment-evidence/docker-compose-ps.txt
+          docker compose logs --no-color > deployment-evidence/docker-compose-logs.txt
+          curl --silent --output /dev/null --write-out "HTTP %{http_code}\n" \
+            http://127.0.0.1:8000/admin/login/ \
+            | tee deployment-evidence/http-status.txt || true
+
+      - name: Publicar evidencia del despliegue
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidencia-despliegue-${{ github.sha }}
+          path: deployment-evidence/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Detener contenedores
+        if: always()
+        run: docker compose down --volumes
